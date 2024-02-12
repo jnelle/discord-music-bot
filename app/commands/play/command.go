@@ -256,15 +256,12 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 
 	video := c.toYouTubeModel(videoURL, data.Title, data.Thumbnail, data.DurationString, data.ID)
 	if err := player.EnqueueVideo(video); err != nil {
-		log.Error("failed to add video to playback service", slog.String("error", err.Error()))
+		log.Error("Failed to enqueue video", slog.String("error", err.Error()))
 		return
 	}
 	duration, err := time.ParseDuration(fmt.Sprintf("%vs", data.Duration))
 	if err != nil {
 		log.Error("Duration doesnt exist", slog.String("error", err.Error()))
-	}
-	if err := player.EnqueueVideo(video); err != nil {
-		log.Error("Failed to enqueue video", slog.String("error", err.Error()))
 	}
 
 	log.Info("added video to player", "video", video.Title)

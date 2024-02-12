@@ -11,7 +11,6 @@ import (
 	"time"
 
 	youtube "jnelle/discord-music-bot/adapter/youtube_dlp"
-	"jnelle/discord-music-bot/utils"
 
 	"github.com/ClintonCollins/dca"
 	"github.com/bwmarrin/discordgo"
@@ -59,9 +58,7 @@ func NewPlayer(vc *discordgo.VoiceConnection, youtubeRepository youtube.YouTubeS
 func (s *Player) EnqueueVideo(video *youtube.Video) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !utils.ArrayContains[*youtube.Video](s.queue, video) {
-		s.queue = append(s.queue, video)
-	}
+	s.queue = append(s.queue, video)
 
 	return nil
 }
