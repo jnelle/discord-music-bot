@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	youtube "jnelle/discord-music-bot/adapter/youtube_dlp"
+	"jnelle/discord-music-bot/common"
 	"jnelle/discord-music-bot/domain/playback"
 	"jnelle/discord-music-bot/internal/discord/bot"
 	"jnelle/discord-music-bot/internal/discord/embed"
@@ -18,10 +19,27 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-const interactionSkippedSongResponse string = "Skipped current song."
-const interactionNothingToSkip string = "Nothing to skip."
+const (
+	interactionSameChannelResponse   string = "You must be in the same voice channel as the bot to use this command."
+	interactionNothingToSkipResponse string = "Nothing to skip."
+	interactionSkippedSongResponse   string = "Skipped current song."
+)
 
-var ErrUserIsNotInGuild = errors.New("user is not in any voice channels")
+var (
+	errBotIsNotInAnyChannel   = errors.New("bot isn't in any channels")
+	errUserNotInAnyChannel    = errors.New("you must be in a voice channel")
+	errUserNotInBotsChannel   = errors.New("you must be in the same channel as the bot")
+	errFailedGetGuild         = errors.New("failure getting guild: ")
+	ErrUserIsNotInGuild       = errors.New("user is not in any voice channels")
+	errURLWrong               = errors.New("domain must be `youtube.com` or `youtu.be`")
+	errFailedJoinVoiceChannel = errors.New("failure joining voice channel")
+	errStartingPlayback       = errors.New("faield to start playback")
+	allowedHosts              = []string{
+		"www.youtube.com",
+		"youtube.com",
+		"youtu.be",
+	}
+)
 
 type Command struct {
 	playerStorage     *playback.PlayerStorage
@@ -29,15 +47,25 @@ type Command struct {
 	bot               *bot.Bot
 	youTubeRepository youtube.YouTubeService
 	wg                *sync.WaitGroup
+	db                common.DBService
+	storage           common.StorageService
 }
 
-func NewCommand(bot *bot.Bot, YouTubeRepository youtube.YouTubeService, wg *sync.WaitGroup) *Command {
+func NewCommand(
+	bot *bot.Bot,
+	YouTubeRepository youtube.YouTubeService,
+	wg *sync.WaitGroup,
+	db common.DBService,
+	storage common.StorageService,
+) *Command {
 	return &Command{
 		playerStorage:     playback.NewManager(),
 		logger:            slog.Default(),
 		bot:               bot,
 		youTubeRepository: YouTubeRepository,
 		wg:                wg,
+		db:                db,
+		storage:           storage,
 	}
 }
 
@@ -122,12 +150,6 @@ func (c *Command) GetSignature() []*discordgo.ApplicationCommand {
 	}
 }
 
-var allowedHosts = []string{
-	"www.youtube.com",
-	"youtube.com",
-	"youtu.be",
-}
-
 // func (c *Command) handlePlayPlaylist(session *discordgo.Session, intr *discordgo.InteractionCreate) {
 // 	opt := intr.ApplicationCommandData()
 // 	queryString := opt.Options[0].StringValue()
@@ -172,22 +194,13 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 	opt := intr.ApplicationCommandData()
 	queryString := opt.Options[0].StringValue()
 
-	log := c.logger.With("[play.go]", slog.String("query", queryString))
+	log := c.logger.With("[command.go]", slog.String("query", queryString))
 
-	url, err := url.ParseRequestURI(queryString)
+	videoURL, err := c.checkURL(log, queryString)
 	if err != nil {
-		log.Error("error parsing url", "err", err)
-		format.DisplayInteractionError(session, intr, "Error parsing url!")
-		return
-	}
-
-	if !utils.ArrayContains[string](allowedHosts, url.Host) {
-		log.Error("error parsing url: incorrect domain")
 		format.DisplayInteractionError(session, intr, "Domain must be `youtube.com`, `youtu.be` and etc.")
 		return
 	}
-
-	videoURL := url.String()
 
 	log.Info("requesting video data", "url", videoURL)
 
@@ -201,14 +214,6 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 		return
 	}
 
-	err = session.InteractionRespond(intr.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
-	})
-	if err != nil {
-		log.Error("failure responding to interaction", "err", err)
-		return
-	}
-
 	if err := c.isUserAndBotInSameChannel(session, intr.GuildID, intr.Member.User.ID); err != nil {
 		switch {
 		case errors.Is(err, errUserNotInAnyChannel):
@@ -218,40 +223,32 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 			return
 		}
 	}
+	err = session.InteractionRespond(intr.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+	if err != nil {
+		log.Error("failure responding to interaction", "err", err)
+		return
+	}
 
 	var player *playback.Player
 	if ps := c.playerStorage.Get(intr.GuildID); ps != nil {
 		log.Info("get stored player")
 		player = ps
 	} else {
-		log.Info("creating new player")
-
-		channelID, err := c.getUserChannelID(session, intr.GuildID, intr.Member.User.ID)
+		p, err := c.createAndJoinVoiceChannelPlayer(log, session, intr)
 		if err != nil {
-			log.Error("failure getting channel id", "err", err)
-			format.DisplayInteractionError(session, intr, "You must be in a voice channel to use this command.")
-			return
-		}
+			switch err {
+			case errUserNotInAnyChannel:
+				format.DisplayInteractionError(session, intr, "You must be in a voice channel to use this command.")
+			case errFailedJoinVoiceChannel:
+				format.DisplayInteractionError(session, intr, "Error joining voice channel.")
+			case errStartingPlayback:
+				format.DisplayInteractionError(session, intr, "Error starting playback.")
 
-		voice, err := session.ChannelVoiceJoin(intr.GuildID, channelID, false, true)
-		if err != nil {
-			if voice != nil {
-				voice.Close()
 			}
-			log.Error("failure joining voice channel", "channelId", channelID, "err", err)
-			format.DisplayInteractionError(session, intr, "Error joining voice channel.")
-			return
 		}
-
-		c.wg.Add(1)
-		player = c.setupPlayer(session, intr, voice, log)
-		if player == nil {
-			if voice != nil {
-				voice.Close()
-			}
-			format.DisplayInteractionError(session, intr, "Error starting playback.")
-			return
-		}
+		player = p
 	}
 
 	video := c.toYouTubeModel(videoURL, data.Title, data.Thumbnail, data.DurationString, data.ID)
@@ -259,12 +256,32 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 		log.Error("Failed to enqueue video", slog.String("error", err.Error()))
 		return
 	}
+
 	duration, err := time.ParseDuration(fmt.Sprintf("%vs", data.Duration))
 	if err != nil {
 		log.Error("Duration doesnt exist", slog.String("error", err.Error()))
 	}
 
 	log.Info("added video to player", "video", video.Title)
+	utils.BackgroundTask(c.wg, func() error {
+		media, err := c.db.Read(ctx, data.ID)
+		if err != nil && media == nil {
+			err = c.db.Create(ctx, &common.Media{
+				ID:             data.ID,
+				Title:          data.Title,
+				DurationString: data.DurationString,
+				Duration:       data.Duration,
+				BucketPath:     data.OriginalURL,
+			})
+			if err != nil {
+				slog.Error("[command.go]", slog.String("error", err.Error()))
+				return err
+			}
+
+		}
+
+		return nil
+	})
 
 	embed := embed.NewEmbed().
 		SetAuthor("Added to queue").
@@ -282,11 +299,10 @@ func (c *Command) handlePlay(session *discordgo.Session, intr *discordgo.Interac
 		log.Error("failure creating followup message to interaction", slog.String("err", err.Error()))
 		return
 	}
-
 }
 
 func (c *Command) setupPlayer(session *discordgo.Session, intr *discordgo.InteractionCreate, voice *discordgo.VoiceConnection, log *slog.Logger) *playback.Player {
-	player := playback.NewPlayer(voice, c.youTubeRepository, c.wg)
+	player := playback.NewPlayer(voice, c.youTubeRepository)
 	if err := c.playerStorage.Add(intr.GuildID, player); err != nil {
 		log.Error("error adding a new playback service", "guildId", intr.GuildID, "err", err)
 		return nil
@@ -299,7 +315,7 @@ func (c *Command) setupPlayer(session *discordgo.Session, intr *discordgo.Intera
 
 		// Setup service timeout ticker, in case bot is left alone in a channel
 		go func(channelId string) {
-			tick := time.NewTicker(time.Minute)
+			tick := time.NewTicker(time.Second * 30)
 			defer tick.Stop()
 			for {
 				select {
@@ -371,10 +387,10 @@ func (c *Command) handleSkip(sesh *discordgo.Session, intr *discordgo.Interactio
 		case errors.Is(err, errUserNotInAnyChannel):
 			fallthrough
 		case errors.Is(err, errUserNotInBotsChannel):
-			format.DisplayInteractionError(sesh, intr, "You must be in the same voice channel as the bot to use this command.")
+			format.DisplayInteractionError(sesh, intr, interactionSameChannelResponse)
 			return
 		case errors.Is(err, errBotIsNotInAnyChannel):
-			format.DisplayInteractionError(sesh, intr, interactionNothingToSkip)
+			format.DisplayInteractionError(sesh, intr, interactionNothingToSkipResponse)
 			return
 		}
 	}
@@ -389,11 +405,11 @@ func (c *Command) handleSkip(sesh *discordgo.Session, intr *discordgo.Interactio
 	if ps := c.playerStorage.Get(guildID); ps != nil {
 		err := ps.Skip(int(skipAmount))
 		if errors.Is(err, playback.ErrSkipUnavailable) {
-			format.DisplayInteractionError(sesh, intr, interactionNothingToSkip)
+			format.DisplayInteractionError(sesh, intr, interactionNothingToSkipResponse)
 			return
 		}
 	} else {
-		format.DisplayInteractionError(sesh, intr, interactionNothingToSkip)
+		format.DisplayInteractionError(sesh, intr, interactionNothingToSkipResponse)
 		return
 	}
 
@@ -408,13 +424,6 @@ func (c *Command) handleSkip(sesh *discordgo.Session, intr *discordgo.Interactio
 		format.DisplayInteractionError(sesh, intr, "Failure responding to interaction. See the log for details.")
 	}
 }
-
-var (
-	errBotIsNotInAnyChannel = errors.New("bot isn't in any channels")
-	errUserNotInAnyChannel  = errors.New("you must be in a voice channel")
-	errUserNotInBotsChannel = errors.New("you must be in the same channel as the bot")
-	errFailedGetGuild       = errors.New("failure getting guild: ")
-)
 
 func (c *Command) isUserAndBotInSameChannel(sesh *discordgo.Session, guildID string, userID string) error {
 	botUserID := sesh.State.User.ID
@@ -490,4 +499,50 @@ func (c *Command) toYouTubeModel(videoURL, title, thumbnail, length, ID string) 
 		Length:    length,
 		URL:       videoURL,
 	}
+}
+
+func (c *Command) createAndJoinVoiceChannelPlayer(log *slog.Logger, session *discordgo.Session, intr *discordgo.InteractionCreate) (*playback.Player, error) {
+	log.Info("creating new player")
+
+	channelID, err := c.getUserChannelID(session, intr.GuildID, intr.Member.User.ID)
+	if err != nil {
+		log.Error("failure getting channel id", slog.String("error", err.Error()))
+		return nil, errUserNotInAnyChannel
+	}
+
+	voice, err := session.ChannelVoiceJoin(intr.GuildID, channelID, false, true)
+	if err != nil {
+		if voice != nil {
+			voice.Close()
+		}
+		log.Error("failure joining voice channel", "channelId", channelID, "err", err)
+		return nil, errFailedJoinVoiceChannel
+	}
+
+	c.wg.Add(1)
+	player := c.setupPlayer(session, intr, voice, log)
+	c.wg.Done()
+	if player == nil {
+		if voice != nil {
+			voice.Close()
+		}
+		return nil, errStartingPlayback
+	}
+
+	return player, nil
+}
+
+func (c *Command) checkURL(log *slog.Logger, queryString string) (string, error) {
+	url, err := url.ParseRequestURI(queryString)
+	if err != nil {
+		log.Error("error parsing url", "err", err)
+		return "", err
+	}
+
+	if !utils.ArrayContains[string](allowedHosts, url.Host) {
+		log.Error("error parsing url: incorrect domain")
+		return "", errURLWrong
+	}
+
+	return url.String(), nil
 }

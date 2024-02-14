@@ -3,7 +3,6 @@ package app
 import (
 	"fmt"
 	"jnelle/discord-music-bot/app/commands/play"
-	"jnelle/discord-music-bot/internal/discord/bot"
 	"log/slog"
 
 	"github.com/bwmarrin/discordgo"
@@ -15,16 +14,16 @@ type Command interface {
 	GetSignature() []*discordgo.ApplicationCommand
 }
 
-func (a *Application) SetupCommands(bot *bot.Bot) error {
-	botUserID := bot.Session.State.User.ID
+func (a *Application) SetupCommands() error {
+	botUserID := a.Bot.Session.State.User.ID
 	commands := map[string]Command{
-		"play": play.NewCommand(bot, a.YTService, &a.Wg),
+		"play": play.NewCommand(a.Bot, a.YTService, &a.Wg, a.Adapter.DB, a.Adapter.Storage),
 	}
 
 	for name, cmd := range commands {
 		sigs := cmd.GetSignature()
 		for _, sig := range sigs {
-			regCmd, err := bot.Session.ApplicationCommandCreate(
+			regCmd, err := a.Bot.Session.ApplicationCommandCreate(
 				botUserID, "", sig,
 			)
 			if err != nil {

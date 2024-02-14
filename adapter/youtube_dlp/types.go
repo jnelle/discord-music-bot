@@ -12,11 +12,6 @@ func (d *Video) GetShortURL() string {
 	return "https://youtu.be/" + d.ID
 }
 
-type SearchResult struct {
-	Error error
-	Video Video
-}
-
 type PlaylistSong struct {
 	ID    string `json:"id"`
 	URL   string `json:"url"`

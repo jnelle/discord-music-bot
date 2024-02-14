@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"jnelle/discord-music-bot/internal/config"
 	"jnelle/discord-music-bot/service"
 	"log/slog"
@@ -10,14 +11,14 @@ import (
 )
 
 func main() {
-
+	ctx := context.Background()
 	cfg, err := config.New()
 	if err != nil {
 		slog.Error("[main.go]", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 
-	app, err := service.New(*cfg)
+	app, err := service.New(*cfg, ctx)
 	if err != nil {
 		slog.Error("[main.go]", slog.String("error", err.Error()))
 		os.Exit(1)

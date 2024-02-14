@@ -39,10 +39,9 @@ type Player struct {
 
 	running           bool
 	youtubeRepository youtube.YouTubeService
-	wg                *sync.WaitGroup
 }
 
-func NewPlayer(vc *discordgo.VoiceConnection, youtubeRepository youtube.YouTubeService, wg *sync.WaitGroup) *Player {
+func NewPlayer(vc *discordgo.VoiceConnection, youtubeRepository youtube.YouTubeService) *Player {
 	return &Player{
 		vc:            vc,
 		queue:         make([]*youtube.Video, 0),
@@ -50,7 +49,6 @@ func NewPlayer(vc *discordgo.VoiceConnection, youtubeRepository youtube.YouTubeS
 		logger: slog.With("player.go",
 			slog.Group("player", slog.String("guildID", vc.GuildID), slog.String("channelID", vc.ChannelID))),
 		youtubeRepository: youtubeRepository,
-		wg:                wg,
 	}
 
 }
@@ -124,7 +122,6 @@ func (s *Player) Run(ctx context.Context) error {
 
 	s.setRunning(true)
 	defer s.setRunning(false)
-	s.wg.Done()
 	s.waitForVideos(ctx)
 
 	for s.nextVideo() {

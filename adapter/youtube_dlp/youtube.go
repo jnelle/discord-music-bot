@@ -226,3 +226,14 @@ func (y *YouTubeRepository) PlayVideo(ctx context.Context, url string) *exec.Cmd
 		"-o", "-",
 	)
 }
+
+func (y *YouTubeRepository) DownloadVideo(ctx context.Context, url string) *exec.Cmd {
+	return exec.CommandContext(ctx,
+		"yt-dlp",
+		url,
+		"--proxy", y.proxy,
+		"--quiet",
+		"--no-warnings",
+		"--no-progress",
+	)
+}
