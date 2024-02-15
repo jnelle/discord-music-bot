@@ -38,3 +38,4 @@ jobs:
             registry-password: ${{ secrets.REGISTRY_PASSWORD }}
             name: discord-bot
             location: 'west us'
+            secure-environment-variables: DISCORD_BOT_TOKEN=${{ secrets.DISCORD_BOT_TOKEN }} HTTP_PROXY=${{ secrets.HTTP_PROXY }} AZURE_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }} AZURE_COSMOS_URL=${{ secrets.AZURE_COSMOS_URL }} AZURE_BLOB_STORAGE_CONNECTION_STRING=${{ secrets.AZURE_BLOB_STORAGE_CONNECTION_STRING }}
