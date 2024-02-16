@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/Azure/azure-sdk-for-go/sdk/data/azcosmos"
 	"github.com/Azure/azure-sdk-for-go/sdk/storage/azblob"
 )
@@ -19,28 +20,28 @@ func NewAzureClient() *AzureClient {
 
 func (a *AzureClient) NewAzCosmos(clientID, endpointURL string) error {
 	// FOR AZURE MANAGED IDENTITY
-	// azClientID := azidentity.ClientID(clientID)
-	// opts := azidentity.ManagedIdentityCredentialOptions{ID: azClientID}
-	// cred, err := azidentity.NewManagedIdentityCredential(&opts)
-	// if err != nil {
-	// 	slog.Error("[azure.go]", slog.String("error", err.Error()))
-	// 	return nil, err
-	// }
-	cred, err := azcosmos.NewKeyCredential(clientID)
+	azClientID := azidentity.ClientID(clientID)
+	opts := azidentity.ManagedIdentityCredentialOptions{ID: azClientID}
+	cred, err := azidentity.NewManagedIdentityCredential(&opts)
 	if err != nil {
-		slog.Error("[db.go]", slog.String("error", err.Error()))
+		slog.Error("[azure.go]", slog.String("error", err.Error()))
 		return err
 	}
-	// client, err := azcosmos.NewClient(endpointURL, cred, nil)
+	// cred, err := azcosmos.NewKeyCredential(clientID)
 	// if err != nil {
 	// 	slog.Error("[db.go]", slog.String("error", err.Error()))
-	// 	return nil, err
+	// 	return err
 	// }
-	client, err := azcosmos.NewClientWithKey(endpointURL, cred, nil)
+	client, err := azcosmos.NewClient(endpointURL, cred, nil)
 	if err != nil {
 		slog.Error("[db.go]", slog.String("error", err.Error()))
 		return err
 	}
+	// client, err := azcosmos.NewClientWithKey(endpointURL, cred, nil)
+	// if err != nil {
+	// 	slog.Error("[db.go]", slog.String("error", err.Error()))
+	// 	return err
+	// }
 	a.azcosmos = client
 	return nil
 }
