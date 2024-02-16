@@ -19,10 +19,8 @@ func NewAzureClient() *AzureClient {
 }
 
 func (a *AzureClient) NewAzCosmos(clientID, endpointURL string) error {
-	// FOR AZURE MANAGED IDENTITY
-	azClientID := azidentity.ClientID(clientID)
-	opts := azidentity.ManagedIdentityCredentialOptions{ID: azClientID}
-	cred, err := azidentity.NewManagedIdentityCredential(&opts)
+
+	cred, err := azidentity.NewDefaultAzureCredential(nil)
 	if err != nil {
 		slog.Error("[azure.go]", slog.String("error", err.Error()))
 		return err
